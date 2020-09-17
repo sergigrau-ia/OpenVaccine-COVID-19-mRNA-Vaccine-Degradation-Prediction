@@ -100,4 +100,102 @@ def get_sets(train_path, test_path, submission_path, images_path):
     
     return train_inputs, public_test, private_test, train_img, test_public_img, test_private_img 
     
+def create_cnn_model():
+    # CNN
+    cnn_input = tf.keras.layers.Input(shape=(seq_len, seq_len, 1))
+
+    x = tf.keras.layers.Conv2D(128,(3,3), padding='same',)(cnn_input)
+    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(x)
+    x = tf.keras.layers.Dropout(0.25) (x)
+
+    x = tf.keras.layers.Flatten()(x)
+
+    x = tf.keras.layers.Dense(128)(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation('relu')(x)
+    x = tf.keras.layers.Dropout(0.25)(x)
     
+    # truncated = x[:, :pred_len]
+    
+    cnn_out = tf.keras.layers.Dense(5, activation='linear')(truncated)
+
+    cnn_model = tf.keras.models.Model(cnn_input, cnn_out)   
+    
+def create_wavenet_gru(seq_len = 107, pred_len = 68, embed_dim = 75, 
+                       dropout = 0.10):
+    
+    def wave_block(x, filters, kernel_size, n):
+        dilation_rates = [2 ** i for i in range(n)]
+        x = tf.keras.layers.Conv1D(filters = filters, 
+                                   kernel_size = 1,
+                                   padding = 'same')(x)
+        res_x = x
+        for dilation_rate in dilation_rates:
+            tanh_out = tf.keras.layers.Conv1D(filters = filters,
+                              kernel_size = kernel_size,
+                              padding = 'same', 
+                              activation = 'tanh', 
+                              dilation_rate = dilation_rate)(x)
+            sigm_out = tf.keras.layers.Conv1D(filters = filters,
+                              kernel_size = kernel_size,
+                              padding = 'same',
+                              activation = 'sigmoid', 
+                              dilation_rate = dilation_rate)(x)
+            x = tf.keras.layers.Multiply()([tanh_out, sigm_out])
+            x = tf.keras.layers.Conv1D(filters = filters,
+                       kernel_size = 1,
+                       padding = 'same')(x)
+            res_x = tf.keras.layers.Add()([res_x, x])
+        
+        return res_x
+    
+    # WAVENET + GRU
+    inputs = tf.keras.layers.Input(shape = (seq_len, 3))
+    
+    embed = tf.keras.layers.Embedding(input_dim = len(token2int), output_dim = embed_dim)(inputs)
+    reshaped = tf.reshape(embed, shape = (-1, embed.shape[1], embed.shape[2] * embed.shape[3]))
+    reshaped = tf.keras.layers.SpatialDropout1D(dropout)(reshaped)
+    
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(256, 
+                                                          dropout = dropout, 
+                                                          return_sequences = True, 
+                                                          kernel_initializer = 'orthogonal'))(reshaped)
+    x = wave_block(x, 32, 3, 6)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation('relu')(x)
+    x = tf.keras.layers.Dropout(dropout)(x)
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(256, 
+                                                          dropout = dropout, 
+                                                          return_sequences = True, 
+                                                          kernel_initializer = 'orthogonal'))(x)
+    x = wave_block(x, 64, 3, 4)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation('relu')(x)
+    x = tf.keras.layers.Dropout(dropout)(x)
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(256, 
+                                                          dropout = dropout, 
+                                                          return_sequences = True, 
+                                                          kernel_initializer = 'orthogonal'))(x)
+    x = wave_block(x, 128, 3, 2)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation('relu')(x)
+    x = tf.keras.layers.Dropout(dropout)(x)
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(256, 
+                                                          dropout = dropout, 
+                                                          return_sequences = True, 
+                                                          kernel_initializer = 'orthogonal'))(x)
+        
+    x = tf.keras.layers.Flatten()(x)
+    truncated = x[:, :pred_len]
+    out = tf.keras.layers.Dense(5, activation = 'linear')(truncated)
+    model = tf.keras.models.Model(inputs = inputs, outputs = out)
+    
+def create_lstm(seq_len = 107, pred_len = 68, embed_dim = 75, dropout = 0.10):
+    inputs = tf.keras.layers.Input(shape = (seq_len, seq_len))
+    reshaped = tf.reshape(inputs, shape = (-1, inputs.shape[1], inputs.shape[2]))
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, 
+                                                           dropout = dropout, 
+                                                           return_sequences = True, 
+                                                           kernel_initializer = 'orthogonal'))(reshaped)
